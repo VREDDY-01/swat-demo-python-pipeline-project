@@ -1,0 +1,50 @@
+version: 0.2
+
+env:
+  secrets-manager:
+    SSH_PRIVATE_KEY: "swat2app"
+  variables:
+    EC2_USER: "ubuntu"
+    # EC2_HOSTS: ""  # Add actual IPs via CodeBuild environment variables
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.9
+    commands:
+      - echo "Writing SSH key..."
+      - echo -e "$SSH_PRIVATE_KEY" > /tmp/deploy_key.pem
+      - echo "Wrote to /tmp/deploy_key.pem, printing first few lines:"
+      - head -n 5 /tmp/deploy_key.pem || echo "Failed to read key!"
+      - file /tmp/deploy_key.pem || echo "File type not recognized!"
+      - chmod 400 /tmp/deploy_key.pem
+      - echo "Finished chmod"
+  build:
+    commands:
+      - echo "Zipping Flask application"
+      - zip -r app.zip .
+  post_build:
+    commands:
+      - echo "Creating remote deploy script. .."
+      - |
+        cat <<'EOT' > remote_deploy.sh
+        #!/bin/bash
+        sudo apt install -y unzip
+        mkdir -p ~/flaskapp
+        unzip -o ~/app.zip -d ~/flaskapp
+        cd ~/flaskapp
+        chmod +x Scripts/*.sh
+        ./Scripts/deploy.sh
+        exit
+        EOT
+      - chmod +x remote_deploy.sh
+      - |
+        for host in $EC2_HOSTS; do
+          echo "Deploying to $host"
+          scp -o StrictHostKeyChecking=no -i /tmp/deploy_key.pem app.zip remote_deploy.sh $EC2_USER@$host:/home/$EC2_USER/
+          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key.pem $EC2_USER@$host "bash /home/$EC2_USER/remote_deploy.sh"
+        done
+
+artifacts:
+  files:
+    - app.zip
